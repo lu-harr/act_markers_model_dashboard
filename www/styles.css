@@ -114,6 +114,35 @@ body {
   background: #fff;
 }
 
+.btn-data-toggle {
+  min-height: 42px;
+  margin-bottom: 18px;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  background: rgba(23, 107, 87, 0.06);
+  color: var(--accent-dark);
+  font-weight: 750;
+}
+
+.btn-data-toggle:hover,
+.btn-data-toggle:focus {
+  border-color: var(--accent-dark);
+  background: rgba(23, 107, 87, 0.12);
+  color: var(--accent-dark);
+}
+
+.observation-year-controls {
+  padding: 12px 12px 2px;
+  margin: -8px 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.observation-year-controls .form-group {
+  margin-bottom: 12px;
+}
+
 .btn-screenshot {
   min-height: 44px;
   border: 0;
@@ -258,6 +287,85 @@ body {
   margin-top: 8px;
   color: var(--muted);
   font-size: 0.62rem;
+}
+
+.size-legend {
+  min-width: 132px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 10px;
+  background: rgba(247, 246, 241, 0.94);
+  box-shadow: 0 6px 22px rgba(23, 35, 31, 0.18);
+  color: var(--ink);
+  backdrop-filter: blur(8px);
+}
+
+.size-legend__title {
+  padding-bottom: 7px;
+  margin-bottom: 7px;
+  border-bottom: 1px solid #d9ded9;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.size-legend__row {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  min-height: 32px;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.size-legend__symbol {
+  display: block;
+  justify-self: center;
+  border: 1.25px solid #f7f6f1;
+  border-radius: 50%;
+  background: #176b57;
+  box-shadow: 0 0 0 1px rgba(23, 35, 31, 0.25);
+}
+
+.observation-popup {
+  min-width: 210px;
+  color: var(--ink);
+  font-size: 0.76rem;
+}
+
+.observation-popup dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.observation-popup dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.observation-popup dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.observation-popup__details {
+  display: grid;
+  gap: 4px;
+  padding-top: 9px;
+  margin-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.observation-popup__details strong {
+  font-size: 0.72rem;
+}
+
+.observation-popup__details span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.35;
 }
 
 .country-label {

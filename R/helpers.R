@@ -232,6 +232,153 @@ load_country_metadata <- function(path, countries) {
   metadata
 }
 
+# Load and validate the preprocessed observational records used by the point layer.
+load_observation_data <- function(path) {
+  if (!file.exists(path)) {
+    stop(
+      "Observation data are missing. Run: Rscript R/link_analysis_data_to_metadata.R",
+      call. = FALSE
+    )
+  }
+
+  observations <- utils::read.csv(
+    path, stringsAsFactors = FALSE, na.strings = c("NA", "")
+  )
+  required <- c(
+    "Longitude", "Latitude", "year", "model", "Marker", "Present", "Tested",
+    "Prevalence", "Authors", "PubMedID", "Marker_details"
+  )
+  absent <- setdiff(required, names(observations))
+  if (length(absent)) {
+    stop("Observation data are missing columns: ", paste(absent, collapse = ", "), call. = FALSE)
+  }
+
+  numeric_columns <- c("Longitude", "Latitude", "year", "Present", "Tested", "Prevalence")
+  for (column in numeric_columns) observations[[column]] <- as.numeric(observations[[column]])
+
+  expected_models <- MODEL_CATALOG$model_id
+  if (!setequal(unique(observations$model), expected_models)) {
+    stop("Observation data do not contain exactly the expected model IDs.", call. = FALSE)
+  }
+  if (anyNA(observations[c("year", "model")])) {
+    stop("Observation data contain missing years or model IDs.", call. = FALSE)
+  }
+  if (max(observations$year, na.rm = TRUE) != OBSERVATION_MAX_YEAR) {
+    stop("The most recent observation year must be ", OBSERVATION_MAX_YEAR, ".", call. = FALSE)
+  }
+
+  valid_tested <- is.finite(observations$Tested) & observations$Tested > 0
+  expected_prevalence <- observations$Present[valid_tested] / observations$Tested[valid_tested]
+  invalid_prevalence <- abs(observations$Prevalence[valid_tested] - expected_prevalence) > 1e-12
+  if (any(invalid_prevalence, na.rm = TRUE)) {
+    stop("Observation prevalence must equal Present / Tested.", call. = FALSE)
+  }
+
+  k13_all <- observations$model == "k13_all"
+  k13_key <- with(
+    observations[k13_all, ],
+    paste(Longitude, Latitude, year, PubMedID, sep = "|")
+  )
+  if (anyDuplicated(k13_key)) {
+    stop("Aggregate K13 observations contain duplicate site records.", call. = FALSE)
+  }
+  if (any(is.na(observations$Marker_details[k13_all]) | observations$Marker_details[k13_all] == "")) {
+    stop("Aggregate K13 observations are missing marker-level details.", call. = FALSE)
+  }
+
+  missing_coordinates <- !is.finite(observations$Longitude) | !is.finite(observations$Latitude)
+  attr(observations, "missing_coordinate_count") <- sum(missing_coordinates)
+  observations
+}
+
+# Format integer-like sample counts without unnecessary decimal places.
+format_count <- function(value) {
+  if (!length(value) || is.na(value) || !is.finite(value)) return("Not available")
+  if (abs(value - round(value)) < 1e-9) {
+    format(round(value), big.mark = ",", scientific = FALSE, trim = TRUE)
+  } else {
+    formatC(value, format = "f", digits = 1, big.mark = ",")
+  }
+}
+
+# Build an area-based radius function and stable representative counts for one model.
+observation_size_scale <- function(tested) {
+  tested <- tested[is.finite(tested) & tested > 0]
+  if (!length(tested)) stop("No positive sample sizes are available for this model.", call. = FALSE)
+
+  maximum <- max(tested)
+  radius <- function(values) {
+    scaled <- sqrt(pmax(values, 0) / maximum) * OBSERVATION_RADIUS_RANGE[["max"]]
+    pmin(
+      OBSERVATION_RADIUS_RANGE[["max"]],
+      pmax(OBSERVATION_RADIUS_RANGE[["min"]], scaled)
+    )
+  }
+  breaks <- unique(as.numeric(stats::quantile(
+    tested, probs = c(0.25, 0.5, 1), names = FALSE, type = 1
+  )))
+  list(radius = radius, breaks = breaks, maximum = maximum)
+}
+
+# Render the custom sample-size legend using the same radii as the Leaflet circles.
+observation_size_legend_html <- function(size_scale) {
+  rows <- paste0(
+    '<div class="size-legend__row"><span class="size-legend__symbol" style="width:',
+    formatC(2 * size_scale$radius(size_scale$breaks), format = "f", digits = 1),
+    'px;height:',
+    formatC(2 * size_scale$radius(size_scale$breaks), format = "f", digits = 1),
+    'px"></span><span>',
+    vapply(size_scale$breaks, format_count, character(1)),
+    "</span></div>",
+    collapse = ""
+  )
+  paste0(
+    '<div class="size-legend"><div class="size-legend__title">Number tested</div>',
+    rows, "</div>"
+  )
+}
+
+# Construct a safe point popup, adding marker-level rows for aggregate K13 sites.
+observation_popup_html <- function(observation) {
+  value <- function(column, fallback = "Not available") {
+    candidate <- observation[[column]]
+    if (!length(candidate) || is.na(candidate) || !nzchar(trimws(as.character(candidate)))) {
+      fallback
+    } else {
+      as.character(candidate)
+    }
+  }
+
+  rows <- c(
+    paste0("<dt>Marker</dt><dd>", htmltools::htmlEscape(value("Marker")), "</dd>"),
+    paste0("<dt>Present</dt><dd>", format_count(observation$Present), "</dd>"),
+    paste0("<dt>Tested</dt><dd>", format_count(observation$Tested), "</dd>"),
+    paste0("<dt>Year</dt><dd>", as.integer(observation$year), "</dd>"),
+    paste0("<dt>Author</dt><dd>", htmltools::htmlEscape(value("Authors")), "</dd>")
+  )
+  if (!is.na(observation$PubMedID) && nzchar(trimws(as.character(observation$PubMedID)))) {
+    rows <- c(
+      rows,
+      paste0("<dt>PubMedID</dt><dd>", htmltools::htmlEscape(observation$PubMedID), "</dd>")
+    )
+  }
+
+  marker_details <- ""
+  if (identical(observation$model, "k13_all")) {
+    details <- strsplit(value("Marker_details"), " | ", fixed = TRUE)[[1]]
+    marker_details <- paste0(
+      '<div class="observation-popup__details"><strong>Marker-level counts</strong>',
+      paste0("<span>", htmltools::htmlEscape(details), "</span>", collapse = ""),
+      "</div>"
+    )
+  }
+
+  htmltools::HTML(paste0(
+    '<div class="observation-popup"><dl>', paste0(rows, collapse = ""), "</dl>",
+    marker_details, "</div>"
+  ))
+}
+
 # Calculate the first value at which cumulative area weight reaches 50%.
 weighted_median <- function(values, weights) {
   valid <- is.finite(values) & is.finite(weights) & weights > 0

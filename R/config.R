@@ -61,3 +61,8 @@ K13_LEGEND_BREAKS <- c(0.02, 0.1, 0.2, 0.4, 0.6)
 K13_LEGEND_LABELS <- c("0.02", "0.1", "0.2", "0.4", "0.6")
 PARTNER_DRUG_COLOUR_DOMAIN <- c(min = 0, max = 1)
 PARTNER_DRUG_LEGEND_LABELS <- c("0", "0.5", "1")
+
+# Observation controls use 1999 as the UI sentinel displayed to users as "<2000".
+OBSERVATION_YEAR_SENTINEL <- 1999L
+OBSERVATION_MAX_YEAR <- 2024L
+OBSERVATION_RADIUS_RANGE <- c(min = 3.5, max = 15)

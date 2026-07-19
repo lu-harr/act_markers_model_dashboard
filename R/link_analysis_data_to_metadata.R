@@ -1,3 +1,6 @@
+# Shiny auto-sources files under R/, so run this standalone workflow only via Rscript.
+if (sys.nframe() == 0L) {
+
 library(dplyr)
 
 # for some reason Chatty G loves to mess around with paths and roots..
@@ -46,6 +49,21 @@ format_first_author <- function(authors) {
   citation
 }
 
+# Return the first usable value in a group while preserving a missing value if none exist.
+first_non_missing <- function(values) {
+  usable <- values[!is.na(values) & trimws(as.character(values)) != ""]
+  if (length(usable)) usable[[1]] else NA_character_
+}
+
+# Sum or maximise count fields without turning an entirely missing group into zero.
+sum_if_present <- function(values) {
+  if (all(is.na(values))) NA_real_ else sum(values, na.rm = TRUE)
+}
+
+max_if_present <- function(values) {
+  if (all(is.na(values))) NA_real_ else max(values, na.rm = TRUE)
+}
+
 # Read the complete MOLDM export and retain one row for each unique publication.
 message("Reading unique MOLDM articles...")
 moldm_articles <- read_analysis_set(
@@ -76,11 +94,13 @@ pubmed_article_lookup <- moldm_articles |>
 message("Linking crt76 analysis data...")
 crt76 <- read_analysis_set(
   "moldm_crt76.csv",
-  c("Longitude", "Latitude", "year", "uniq_id_publication")
+  c("Longitude", "Latitude", "year", "Present", "Tested", "uniq_id_publication")
 ) |>
   dplyr::mutate(
     uniq_id_publication = as.character(uniq_id_publication),
-    Marker = "K76T"
+    model = "crt76",
+    Marker = "K76T",
+    Marker_details = NA_character_
   ) |>
   dplyr::left_join(
     moldm_articles |>
@@ -92,11 +112,18 @@ crt76 <- read_analysis_set(
 message("Linking pfmdr analysis data...")
 pfmdr <- read_analysis_set(
   "pfmdr_single_locus.csv",
-  c("Longitude", "Latitude", "year", "PubMedID", "loc")
+  c("Longitude", "Latitude", "year", "Present", "Tested", "PubMedID", "loc")
 ) |>
   dplyr::mutate(
     PubMedID = clean_pubmed_id(PubMedID),
-    Marker = as.character(loc)
+    Marker = as.character(loc),
+    model = dplyr::recode(
+      Marker,
+      N86Y = "mdr1_86",
+      Y184F = "mdr1_184",
+      D1246Y = "mdr1_1246"
+    ),
+    Marker_details = NA_character_
   ) |>
   dplyr::left_join(pubmed_article_lookup, by = "PubMedID")
 
@@ -104,7 +131,10 @@ pfmdr <- read_analysis_set(
 message("Preparing aggregate K13 analysis data...")
 k13_source <- read_analysis_set(
   "moldm_marcse_with_markers.csv",
-  c("Longitude", "Latitude", "year", "Marker", "Authors", "PubMedID", "mutant", "Present")
+  c(
+    "Longitude", "Latitude", "year", "Marker", "Authors", "PubMedID",
+    "mutant", "Present", "Tested"
+  )
 ) |>
   dplyr::mutate(PubMedID = clean_pubmed_id(PubMedID)) |>
   dplyr::filter(mutant | Marker == "wildtype")
@@ -118,10 +148,37 @@ k13_wildtypes <- k13_source |>
     k13_mutants |>
       dplyr::distinct(Longitude, Latitude, year, PubMedID),
     by = c("Longitude", "Latitude", "year", "PubMedID")
+  ) |>
+  dplyr::mutate(
+    Marker = "Any WHO-listed",
+    Present = 0
   )
 
-k13_all <- dplyr::bind_rows(k13_mutants, k13_wildtypes) |>
-  dplyr::mutate(Marker = "Any WHO-listed")
+# First consolidate repeated rows for the same marker, then calculate site-level totals.
+k13_marker_level <- dplyr::bind_rows(k13_mutants, k13_wildtypes) |>
+  dplyr::group_by(Longitude, Latitude, year, PubMedID, Marker) |>
+  dplyr::summarise(
+    Present = sum_if_present(Present),
+    Tested = max_if_present(Tested),
+    Authors = first_non_missing(Authors),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(Longitude, Latitude, year, PubMedID, Marker) |>
+  dplyr::mutate(
+    Marker_detail = paste0(Marker, " - Present: ", Present, "; Tested: ", Tested)
+  )
+
+k13_all <- k13_marker_level |>
+  dplyr::group_by(Longitude, Latitude, year, PubMedID) |>
+  dplyr::summarise(
+    model = "k13_all",
+    Marker = paste(Marker, collapse = "; "),
+    Present = sum_if_present(Present),
+    Tested = max_if_present(Tested),
+    Authors = first_non_missing(Authors),
+    Marker_details = paste(Marker_detail, collapse = " | "),
+    .groups = "drop"
+  )
 
 # Read each K13 SNP analysis set directly because it already contains article metadata.
 k13_snp_files <- c(
@@ -135,26 +192,71 @@ k13_snp_files <- c(
 k13_snps <- lapply(names(k13_snp_files), function(marker) {
   read_analysis_set(
     k13_snp_files[[marker]],
-    c("Longitude", "Latitude", "year", "Authors", "PubMedID")
+    c("Longitude", "Latitude", "year", "Present", "Tested", "Authors", "PubMedID")
   ) |>
     dplyr::mutate(
       PubMedID = clean_pubmed_id(PubMedID),
-      Marker = marker
+      model = paste0("k13_", marker),
+      Marker = marker,
+      Marker_details = NA_character_
     )
 })
 
-# Combine every analysis set, retain the requested fields, and shorten author lists.
+# Combine every analysis set, calculate prevalence, and shorten author lists.
 message("Combining and formatting analysis metadata...")
 analysis_sets <- c(list(crt76, pfmdr, k13_all), k13_snps)
 analysis_sets <- lapply(analysis_sets, function(data) {
-  dplyr::select(data, Longitude, Latitude, year, Marker, Authors, PubMedID)
+  dplyr::select(
+    data, Longitude, Latitude, year, model, Marker, Present, Tested,
+    Authors, PubMedID, Marker_details
+  )
 })
 
 moldm_reorged <- dplyr::bind_rows(analysis_sets) |>
   dplyr::mutate(
+    Prevalence = dplyr::if_else(
+      !is.na(Tested) & Tested > 0,
+      as.numeric(Present) / as.numeric(Tested),
+      NA_real_
+    ),
     Authors = format_first_author(Authors),
     PubMedID = clean_pubmed_id(PubMedID)
+  ) |>
+  dplyr::select(
+    Longitude, Latitude, year, model, Marker, Present, Tested, Prevalence,
+    Authors, PubMedID, Marker_details
   )
+
+# Validate model coverage, point coordinates, ratios, and aggregate-site uniqueness.
+expected_models <- c(
+  "k13_all", "k13_A675V", "k13_C469Y", "k13_P441L", "k13_R561H",
+  "k13_R622I", "crt76", "mdr1_86", "mdr1_184", "mdr1_1246"
+)
+if (!setequal(unique(moldm_reorged$model), expected_models)) {
+  stop("The reorganised data do not contain exactly the ten expected model IDs.", call. = FALSE)
+}
+if (anyNA(moldm_reorged[c("year", "model")])) {
+  stop("The reorganised data contain missing years or model IDs.", call. = FALSE)
+}
+missing_coordinates <- is.na(moldm_reorged$Longitude) | is.na(moldm_reorged$Latitude)
+if (any(missing_coordinates)) {
+  message(sprintf(
+    "Retaining %d source records with missing coordinates; the dashboard must not map them.",
+    sum(missing_coordinates)
+  ))
+}
+valid_tested <- !is.na(moldm_reorged$Tested) & moldm_reorged$Tested > 0
+expected_prevalence <- moldm_reorged$Present[valid_tested] / moldm_reorged$Tested[valid_tested]
+if (any(abs(moldm_reorged$Prevalence[valid_tested] - expected_prevalence) > 1e-12, na.rm = TRUE)) {
+  stop("At least one prevalence does not equal Present / Tested.", call. = FALSE)
+}
+k13_site_key <- with(
+  moldm_reorged[moldm_reorged$model == "k13_all", ],
+  paste(Longitude, Latitude, year, PubMedID, sep = "|")
+)
+if (anyDuplicated(k13_site_key)) {
+  stop("Aggregate K13 data contain duplicate site/year/publication records.", call. = FALSE)
+}
 
 # Write atomically so a failed run cannot leave a partial output CSV.
 output_path <- data_path("moldm_reorged.csv")
@@ -167,3 +269,4 @@ if (!file.rename(temporary_path, output_path)) {
 
 message(sprintf("Wrote %s rows to %s", nrow(moldm_reorged), output_path))
 
+}

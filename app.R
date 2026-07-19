@@ -25,6 +25,22 @@ metadata_state <- tryCatch(
   error = function(error) list(data = NULL, error = conditionMessage(error))
 )
 
+# Load the prepared observation table once and retain a readable startup error if invalid.
+observation_state <- tryCatch(
+  {
+    data <- load_observation_data(file.path("data", "moldm_reorged.csv"))
+    missing_coordinates <- attr(data, "missing_coordinate_count")
+    if (missing_coordinates > 0) {
+      message(
+        "Observation data: ", missing_coordinates,
+        " record(s) with missing coordinates will not be mapped."
+      )
+    }
+    list(data = data, error = NULL)
+  },
+  error = function(error) list(data = NULL, error = conditionMessage(error))
+)
+
 # Named vectors give Shiny readable labels while retaining stable IDs as values.
 model_choices <- stats::setNames(MODEL_CATALOG$model_id, MODEL_CATALOG$model_label)
 country_choices <- c(
@@ -51,7 +67,8 @@ ui <- shiny::fluidPage(
     shiny::includeCSS(file.path("www", "styles.css")),
     shiny::includeScript(file.path("www", "html2canvas.min.js")),
     shiny::includeScript(file.path("www", "html2canvas-browser-bridge.js")),
-    shiny::includeScript(file.path("www", "map-screenshot.js"))
+    shiny::includeScript(file.path("www", "map-screenshot.js")),
+    shiny::includeScript(file.path("www", "observation-slider.js"))
   ),
   shiny::div(
     class = "app-shell",
@@ -72,6 +89,20 @@ ui <- shiny::fluidPage(
         shiny::sliderInput(
           "year", "Prediction year", min = 2000, max = 2028,
           value = 2026, step = 1, sep = "", width = "100%"
+        ),
+        shiny::actionButton(
+          "toggle_data", "Show data",
+          icon = shiny::icon("circle-dot"), class = "btn-data-toggle", width = "100%"
+        ),
+        shiny::conditionalPanel(
+          condition = "input.toggle_data % 2 === 1",
+          class = "observation-year-controls",
+          shiny::sliderInput(
+            "observation_years", "Observation years",
+            min = OBSERVATION_YEAR_SENTINEL, max = OBSERVATION_MAX_YEAR,
+            value = c(OBSERVATION_YEAR_SENTINEL, OBSERVATION_MAX_YEAR),
+            step = 1, sep = "", width = "100%"
+          )
         ),
         shiny::selectizeInput(
           "country", "Zoom to country", choices = country_choices,
@@ -148,6 +179,38 @@ server <- function(input, output, session) {
     model_row(input$model)
   })
 
+  # Interpret the action-button count as a persistent Show data / Hide data toggle.
+  data_visible <- shiny::reactive({
+    toggle_count <- if (is.null(input$toggle_data)) 0L else input$toggle_data
+    toggle_count %% 2L == 1L
+  })
+
+  shiny::observeEvent(input$toggle_data, {
+    visible <- data_visible()
+    shiny::updateActionButton(
+      session, "toggle_data",
+      label = if (visible) "Hide data" else "Show data",
+      icon = shiny::icon(if (visible) "circle-xmark" else "circle-dot")
+    )
+    if (visible && !is.null(observation_state$error)) {
+      shiny::showNotification(observation_state$error, type = "error", duration = NULL)
+    }
+  }, ignoreInit = TRUE)
+
+  # Filter prepared records independently of the selected prediction year.
+  active_observations <- shiny::reactive({
+    shiny::req(data_visible(), is.null(observation_state$error), input$observation_years)
+    years <- as.integer(input$observation_years)
+    observations <- observation_state$data
+    keep <- observations$model == input$model &
+      is.finite(observations$Longitude) & is.finite(observations$Latitude) &
+      observations$year <= years[[2]]
+    if (years[[1]] != OBSERVATION_YEAR_SENTINEL) {
+      keep <- keep & observations$year >= years[[1]]
+    }
+    observations[keep, , drop = FALSE]
+  })
+
   # Join precomputed medians to map polygons and build safe hover labels.
   tooltip_labels <- function(model_id, year, model_label) {
     values <- rep(NA_real_, nrow(countries))
@@ -203,6 +266,7 @@ server <- function(input, output, session) {
     )) |>
       leaflet::addMapPane("prediction-pane", zIndex = 250) |>
       leaflet::addMapPane("border-pane", zIndex = 410) |>
+      leaflet::addMapPane("observation-pane", zIndex = 440) |>
       leaflet::addProviderTiles(
         leaflet::providers$CartoDB.PositronNoLabels,
         group = "Basemap"
@@ -269,6 +333,57 @@ server <- function(input, output, session) {
       }
     )
   }, ignoreInit = FALSE)
+
+  # Replace observational circles and their size legend when data controls change.
+  shiny::observe({
+    visible <- data_visible()
+    model <- active_model()
+    proxy <- leaflet::leafletProxy("prediction_map") |>
+      leaflet::clearGroup("Observations") |>
+      leaflet::removeControl("observation-size-legend")
+
+    if (!visible || !is.null(observation_state$error)) return(invisible(NULL))
+
+    points <- active_observations()
+    all_model_points <- observation_state$data[
+      observation_state$data$model == model$model_id &
+        is.finite(observation_state$data$Longitude) &
+        is.finite(observation_state$data$Latitude),
+      , drop = FALSE
+    ]
+    if (!nrow(points) || !nrow(all_model_points)) return(invisible(NULL))
+
+    domain <- model_domains[[model$model_id]]
+    palette <- make_palette(domain, model$is_k13)
+    size_scale <- observation_size_scale(all_model_points$Tested)
+    popups <- lapply(seq_len(nrow(points)), function(index) {
+      observation_popup_html(points[index, , drop = FALSE])
+    })
+
+    proxy |>
+      leaflet::addCircleMarkers(
+        data = points,
+        lng = ~Longitude,
+        lat = ~Latitude,
+        radius = size_scale$radius(points$Tested),
+        layerId = paste0("observation-", seq_len(nrow(points))),
+        group = "Observations",
+        stroke = TRUE,
+        color = "#f7f6f1",
+        weight = 1.25,
+        opacity = 1,
+        fillColor = palette(points$Prevalence),
+        fillOpacity = 0.9,
+        popup = popups,
+        popupOptions = leaflet::popupOptions(maxWidth = 340, maxHeight = 360),
+        options = leaflet::pathOptions(pane = "observation-pane")
+      ) |>
+      leaflet::addControl(
+        html = htmltools::HTML(observation_size_legend_html(size_scale)),
+        position = "bottomright",
+        layerId = "observation-size-legend"
+      )
+  })
 
   # Zoom to a country or return to the standard Africa-centred camera.
   shiny::observeEvent(input$country, {
