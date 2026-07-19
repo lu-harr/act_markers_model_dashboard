@@ -1,3 +1,4 @@
+# Fail early with one actionable message if any runtime packages are unavailable.
 assert_packages <- function(packages) {
   missing <- packages[!vapply(packages, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
   if (length(missing)) {
@@ -9,12 +10,14 @@ assert_packages <- function(packages) {
   }
 }
 
+# Resolve one catalog record from the stable machine-readable model ID.
 model_row <- function(model_id) {
   row <- MODEL_CATALOG[MODEL_CATALOG$model_id == model_id, , drop = FALSE]
   if (nrow(row) != 1L) stop("Unknown model ID: ", model_id, call. = FALSE)
   row
 }
 
+# Extract the four-digit year embedded in each raster layer name.
 extract_layer_years <- function(layer_names) {
   hits <- regexpr("(?:19|20)[0-9]{2}", layer_names, perl = TRUE)
   if (any(hits < 0L)) {
@@ -29,6 +32,7 @@ extract_layer_years <- function(layer_names) {
   years
 }
 
+# Check layer count, year order, CRS, and value availability for one stack.
 validate_raster_stack <- function(raster, model_id, check_values = TRUE) {
   if (!inherits(raster, "SpatRaster")) stop(model_id, ": not a SpatRaster.", call. = FALSE)
   if (terra::nlyr(raster) != length(EXPECTED_YEARS)) {
@@ -55,6 +59,7 @@ validate_raster_stack <- function(raster, model_id, check_values = TRUE) {
   invisible(years)
 }
 
+# Open all raster stacks lazily after validating their metadata.
 load_model_stacks <- function(check_values = TRUE) {
   stacks <- setNames(vector("list", nrow(MODEL_CATALOG)), MODEL_CATALOG$model_id)
   for (i in seq_len(nrow(MODEL_CATALOG))) {
@@ -67,6 +72,7 @@ load_model_stacks <- function(check_values = TRUE) {
   stacks
 }
 
+# Load the supported country geometries and establish stable ISO3 join keys.
 load_african_countries <- function() {
   countries <- rnaturalearth::ne_countries(
     scale = "medium", continent = "Africa", returnclass = "sf"
@@ -98,21 +104,15 @@ load_african_countries <- function() {
   sf::st_transform(countries, 4326)
 }
 
+# Return the fixed colour domain for the selected model family.
 model_domain <- function(raster, is_k13) {
   if (is_k13) {
     return(list(min = K13_COLOUR_DOMAIN[["min"]], max = K13_COLOUR_DOMAIN[["max"]]))
   }
-
-  ranges <- terra::minmax(raster)
-  lower <- min(ranges[1, ], na.rm = TRUE)
-  upper <- max(ranges[2, ], na.rm = TRUE)
-  if (!all(is.finite(c(lower, upper))) || upper <= lower) {
-    stop("Cannot create a colour domain from the raster values.", call. = FALSE)
-  }
-
-  list(min = lower, max = upper)
+  list(min = PARTNER_DRUG_COLOUR_DOMAIN[["min"]], max = PARTNER_DRUG_COLOUR_DOMAIN[["max"]])
 }
 
+# Build a clipping palette function while leaving source prediction values intact.
 make_palette <- function(domain, is_k13) {
   if (is_k13) {
     sqrt_palette <- leaflet::colorNumeric(
@@ -128,14 +128,22 @@ make_palette <- function(domain, is_k13) {
       colours
     }
   } else {
-    leaflet::colorNumeric(
-      palette = c("#b2182b", "#f7f7f7", "#2166ac"),
+    partner_palette <- leaflet::colorNumeric(
+      palette = as.vector(iddoPal::iddo_palettes_sequential$BlGyRd),
       domain = c(domain$min, domain$max),
       na.color = "transparent"
     )
+    function(values) {
+      missing <- is.na(values)
+      adjusted <- pmin(pmax(values, domain$min), domain$max)
+      colours <- partner_palette(adjusted)
+      colours[missing] <- "transparent"
+      colours
+    }
   }
 }
 
+# Format raw prediction values for country tooltips.
 format_prediction <- function(value) {
   if (!length(value) || is.na(value) || !is.finite(value)) return("No prediction available")
   absolute <- abs(value)
@@ -146,6 +154,7 @@ format_prediction <- function(value) {
   }
 }
 
+# Construct a continuous HTML colour bar with family-specific tick positions.
 legend_html <- function(model_label, domain, palette, is_k13) {
   gradient_positions <- seq(0, 1, length.out = 64)
   if (is_k13) {
@@ -168,7 +177,7 @@ legend_html <- function(model_label, domain, palette, is_k13) {
     ifelse(tick_positions == 0, " is-start", ifelse(tick_positions == 100, " is-end", "")),
     '" style="left:',
     formatC(tick_positions, format = "f", digits = 2), '%">',
-    if (is_k13) K13_LEGEND_LABELS else vapply(breaks, format_prediction, character(1)),
+    if (is_k13) K13_LEGEND_LABELS else PARTNER_DRUG_LEGEND_LABELS,
     "</span>",
     collapse = ""
   )
@@ -179,11 +188,12 @@ legend_html <- function(model_label, domain, palette, is_k13) {
     '</div><div class="prediction-legend__bar" style="background:linear-gradient(to right,',
     gradient_stops, ')"></div><div class="prediction-legend__ticks">',
     tick_labels, '</div><div class="prediction-legend__note">',
-    if (is_k13) "Square-root colour scale · range 0–0.6" else "Low (red) to high (blue)",
+    if (is_k13) "Square-root colour scale · range 0–0.6" else "Partner-drug scale · range 0–1",
     "</div></div>"
   )
 }
 
+# Read and validate the complete model/year/country metadata grid.
 load_country_metadata <- function(path, countries) {
   if (!file.exists(path)) {
     stop(
@@ -222,6 +232,7 @@ load_country_metadata <- function(path, countries) {
   metadata
 }
 
+# Calculate the first value at which cumulative area weight reaches 50%.
 weighted_median <- function(values, weights) {
   valid <- is.finite(values) & is.finite(weights) & weights > 0
   if (!any(valid)) return(NA_real_)

@@ -1,7 +1,9 @@
 #!/usr/bin/env Rscript
 
+# Shiny sources every file under R/, so execute this workflow only when called directly.
 if (sys.nframe() == 0L) {
 
+# Resolve the repository root independently of the caller's working directory.
 script_argument <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
 if (!length(script_argument)) stop("Could not determine the script path.", call. = FALSE)
 script_path <- normalizePath(sub("^--file=", "", script_argument[[1]]), mustWork = TRUE)
@@ -12,8 +14,10 @@ source(file.path(project_root, "R", "config.R"), local = FALSE)
 source(file.path(project_root, "R", "helpers.R"), local = FALSE)
 assert_packages(c("terra", "sf", "rnaturalearth", "rnaturalearthdata"))
 
+# Write the final tidy grid alongside the model rasters.
 output_path <- file.path(project_root, "outputs", "country_prediction_metadata.csv")
 
+# Validate every model before performing the expensive polygon extraction.
 message("Loading and validating model rasters...")
 stacks <- load_model_stacks(check_values = TRUE)
 
@@ -29,6 +33,7 @@ for (model_id in names(stacks)[-1]) {
   }
 }
 
+# Transform the filtered country set into the common raster CRS.
 message("Loading African country boundaries...")
 countries_wgs84 <- load_african_countries()
 countries_raster_crs <- sf::st_transform(countries_wgs84, terra::crs(reference))
@@ -37,6 +42,7 @@ message("Calculating cell areas for area-aware medians...")
 cell_area_raster <- terra::cellSize(reference[[1]], unit = "km")
 cell_areas <- terra::values(cell_area_raster, mat = FALSE)
 
+# Summarise all years for one country using exact coverage fractions where available.
 summarise_country <- function(raster, country, years) {
   names(raster) <- paste0("year_", years)
   layer_columns <- names(raster)
@@ -90,6 +96,7 @@ summarise_country <- function(raster, country, years) {
   )
 }
 
+# Accumulate one tidy result block per model/country combination.
 results <- vector("list", nrow(MODEL_CATALOG) * nrow(countries_raster_crs))
 result_index <- 0L
 
@@ -116,6 +123,7 @@ for (model_index in seq_len(nrow(MODEL_CATALOG))) {
   }
 }
 
+# Validate uniqueness and full model/year/country coverage before touching the old CSV.
 metadata <- do.call(rbind, results)
 metadata <- metadata[order(metadata$model_id, metadata$year, metadata$country_iso3), ]
 row.names(metadata) <- NULL
@@ -129,6 +137,7 @@ if (anyDuplicated(key)) stop("Duplicate model/year/country keys were generated."
 if (!setequal(metadata$model_id, MODEL_CATALOG$model_id)) stop("Incomplete model coverage.", call. = FALSE)
 if (!setequal(metadata$year, EXPECTED_YEARS)) stop("Incomplete year coverage.", call. = FALSE)
 
+# Write to a temporary file, then replace the prior CSV only after success.
 dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
 temporary_path <- tempfile("country_prediction_metadata_", tmpdir = dirname(output_path), fileext = ".csv")
 on.exit(if (file.exists(temporary_path)) unlink(temporary_path), add = TRUE)

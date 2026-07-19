@@ -11,7 +11,7 @@ Use R 4.1 or newer. Install the required packages once:
 ```r
 install.packages(c(
   "shiny", "bslib", "leaflet", "terra", "sf", "rnaturalearth",
-  "rnaturalearthdata", "viridisLite", "htmltools"
+  "rnaturalearthdata", "viridisLite", "htmltools", "iddoPal"
 ))
 ```
 

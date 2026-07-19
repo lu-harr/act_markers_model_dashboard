@@ -1,9 +1,12 @@
+# Load shared constants and helper functions before constructing the app.
 source(file.path("R", "config.R"), local = FALSE)
 source(file.path("R", "helpers.R"), local = FALSE)
 
+# Validate static spatial inputs once at process startup.
 countries <- load_african_countries()
 model_stacks <- load_model_stacks(check_values = TRUE)
 
+# Cache one fixed display domain per model for consistent temporal comparison.
 model_domains <- setNames(vector("list", nrow(MODEL_CATALOG)), MODEL_CATALOG$model_id)
 for (i in seq_len(nrow(MODEL_CATALOG))) {
   model_domains[[MODEL_CATALOG$model_id[[i]]]] <- model_domain(
@@ -11,6 +14,7 @@ for (i in seq_len(nrow(MODEL_CATALOG))) {
   )
 }
 
+# Country metadata is optional at startup so raster exploration can still load.
 metadata_state <- tryCatch(
   list(
     data = load_country_metadata(
@@ -21,12 +25,14 @@ metadata_state <- tryCatch(
   error = function(error) list(data = NULL, error = conditionMessage(error))
 )
 
+# Named vectors give Shiny readable labels while retaining stable IDs as values.
 model_choices <- stats::setNames(MODEL_CATALOG$model_id, MODEL_CATALOG$model_label)
 country_choices <- c(
   "All Africa" = "ALL",
   stats::setNames(countries$country_iso3, countries$country_name)
 )
 
+# Apply the visual theme consistently to inputs, typography, and notifications.
 theme <- bslib::bs_theme(
   version = 5,
   bg = "#f5f4ef",
@@ -37,6 +43,7 @@ theme <- bslib::bs_theme(
   heading_font = bslib::font_google("DM Sans")
 )
 
+# The UI uses a compact control sidebar and a map that fills the remaining area.
 ui <- shiny::fluidPage(
   theme = theme,
   shiny::tags$head(
@@ -52,8 +59,8 @@ ui <- shiny::fluidPage(
       class = "control-panel",
       shiny::div(
         class = "brand-block",
-        shiny::div(class = "eyebrow", "MARCSE · MODEL EXPLORER"),
-        shiny::h1("Resistance predictions"),
+        shiny::div(class = "eyebrow", "MARC SE-AFRICA · MODEL EXPLORER"),
+        shiny::h1("Molecular surveillance data & model predictions"),
         shiny::p("Explore modelled mutation prevalence across Africa, 2000–2028.")
       ),
       shiny::div(
@@ -76,22 +83,16 @@ ui <- shiny::fluidPage(
           choices = c("Light map" = "CartoDB.PositronNoLabels", "Street map" = "OpenStreetMap.Mapnik"),
           selected = "CartoDB.PositronNoLabels", width = "100%"
         ),
-        shiny::div(
-          class = "overlay-controls",
-          shiny::checkboxInput("show_place_labels", "Place labels", value = TRUE),
-          shiny::checkboxInput("show_cities", "Major cities", value = FALSE),
-          shiny::checkboxInput("show_landmarks", "Landmarks", value = FALSE)
-        ),
         shiny::actionButton(
           "download_map", "Save map as PNG",
           icon = shiny::icon("camera"), class = "btn-screenshot", width = "100%"
         )
-      ),
-      shiny::div(
-        class = "panel-footer",
-        shiny::uiOutput("metadata_notice"),
-        shiny::p("Country values are area-aware medians from the precomputed metadata file.")
-      )
+      ) #,
+      # shiny::div(
+      #   class = "panel-footer",
+      #   shiny::uiOutput("metadata_notice"),
+      #   shiny::p("Country values are area-aware medians from the precomputed metadata file.")
+      # )
     ),
     shiny::div(
       class = "map-panel",
@@ -106,10 +107,12 @@ ui <- shiny::fluidPage(
 )
 
 server <- function(input, output, session) {
+  # Keep a small per-session LRU cache to avoid repeatedly reopening recent layers.
   raster_cache <- new.env(parent = emptyenv())
   cache_order <- character()
   cache_limit <- 4L
 
+  # Resolve and, if necessary, reproject one model/year raster layer.
   get_raster_layer <- function(model_id, year) {
     key <- paste(model_id, year, sep = "|")
     if (exists(key, envir = raster_cache, inherits = FALSE)) {
@@ -139,11 +142,13 @@ server <- function(input, output, session) {
     layer
   }
 
+  # Expose the selected catalog row to all dependent reactives and observers.
   active_model <- shiny::reactive({
     shiny::req(input$model)
     model_row(input$model)
   })
 
+  # Join precomputed medians to map polygons and build safe hover labels.
   tooltip_labels <- function(model_id, year, model_label) {
     values <- rep(NA_real_, nrow(countries))
     if (!is.null(metadata_state$data)) {
@@ -164,6 +169,7 @@ server <- function(input, output, session) {
     })
   }
 
+  # Redraw supported national borders above the active prediction raster.
   add_country_borders <- function(proxy, model_id, year, model_label) {
     proxy |>
       leaflet::clearGroup("National borders") |>
@@ -190,48 +196,38 @@ server <- function(input, output, session) {
       )
   }
 
+  # Build an unrestricted world map, initially centred on Africa.
   output$prediction_map <- leaflet::renderLeaflet({
     leaflet::leaflet(options = leaflet::leafletOptions(
-      minZoom = 2, worldCopyJump = TRUE, preferCanvas = TRUE
+      worldCopyJump = TRUE, preferCanvas = TRUE
     )) |>
       leaflet::addMapPane("prediction-pane", zIndex = 250) |>
       leaflet::addMapPane("border-pane", zIndex = 410) |>
-      leaflet::addMapPane("label-pane", zIndex = 425) |>
-      leaflet::addMapPane("marker-pane", zIndex = 450) |>
       leaflet::addProviderTiles(
         leaflet::providers$CartoDB.PositronNoLabels,
-        group = "Basemap",
-        options = leaflet::providerTileOptions(noWrap = TRUE)
+        group = "Basemap"
       ) |>
-      leaflet::fitBounds(
-        AFRICA_BOUNDS[["west"]], AFRICA_BOUNDS[["south"]],
-        AFRICA_BOUNDS[["east"]], AFRICA_BOUNDS[["north"]]
+      leaflet::setView(
+        lng = INITIAL_MAP_VIEW[["lng"]],
+        lat = INITIAL_MAP_VIEW[["lat"]],
+        zoom = INITIAL_MAP_VIEW[["zoom"]]
       ) |>
       leaflet::addScaleBar(position = "bottomleft", options = leaflet::scaleBarOptions(imperial = FALSE))
   })
 
+  # Replace only the basemap; the street option explicitly uses OSM Mapnik.
   shiny::observeEvent(input$basemap, {
-    provider <- leaflet::providers[[input$basemap]]
+    provider <- switch(
+      input$basemap,
+      "OpenStreetMap.Mapnik" = leaflet::providers$OpenStreetMap.Mapnik,
+      leaflet::providers$CartoDB.PositronNoLabels
+    )
     leaflet::leafletProxy("prediction_map") |>
       leaflet::clearGroup("Basemap") |>
-      leaflet::addProviderTiles(
-        provider, group = "Basemap",
-        options = leaflet::providerTileOptions(noWrap = TRUE)
-      )
+      leaflet::addProviderTiles(provider, group = "Basemap")
   }, ignoreInit = TRUE)
 
-  shiny::observeEvent(input$show_place_labels, {
-    proxy <- leaflet::leafletProxy("prediction_map") |> leaflet::clearGroup("Place labels")
-    if (isTRUE(input$show_place_labels)) {
-      proxy |>
-        leaflet::addProviderTiles(
-          leaflet::providers$CartoDB.PositronOnlyLabels,
-          group = "Place labels",
-          options = leaflet::providerTileOptions(noWrap = TRUE, pane = "label-pane")
-        )
-    }
-  }, ignoreInit = FALSE)
-
+  # Replace the raster, legend, and country summaries when model or year changes.
   shiny::observeEvent(list(input$model, input$year), {
     model <- active_model()
     year <- as.integer(input$year)
@@ -272,13 +268,15 @@ server <- function(input, output, session) {
     )
   }, ignoreInit = FALSE)
 
+  # Zoom to a country or return to the standard Africa-centred camera.
   shiny::observeEvent(input$country, {
     proxy <- leaflet::leafletProxy("prediction_map")
     if (identical(input$country, "ALL")) {
       proxy |>
-        leaflet::fitBounds(
-          AFRICA_BOUNDS[["west"]], AFRICA_BOUNDS[["south"]],
-          AFRICA_BOUNDS[["east"]], AFRICA_BOUNDS[["north"]]
+        leaflet::setView(
+          lng = INITIAL_MAP_VIEW[["lng"]],
+          lat = INITIAL_MAP_VIEW[["lat"]],
+          zoom = INITIAL_MAP_VIEW[["zoom"]]
         )
     } else {
       selected <- countries[countries$country_iso3 == input$country, ]
@@ -289,32 +287,7 @@ server <- function(input, output, session) {
     }
   }, ignoreInit = TRUE)
 
-  shiny::observeEvent(input$show_cities, {
-    proxy <- leaflet::leafletProxy("prediction_map") |> leaflet::clearGroup("Major cities")
-    if (isTRUE(input$show_cities)) {
-      proxy |>
-        leaflet::addCircleMarkers(
-          data = MAJOR_CITIES, lng = ~lon, lat = ~lat, label = ~name,
-          group = "Major cities", radius = 3.5, stroke = TRUE, weight = 1,
-          color = "#ffffff", fillColor = "#17231f", fillOpacity = 0.95,
-          options = leaflet::pathOptions(pane = "marker-pane")
-        )
-    }
-  }, ignoreInit = FALSE)
-
-  shiny::observeEvent(input$show_landmarks, {
-    proxy <- leaflet::leafletProxy("prediction_map") |> leaflet::clearGroup("Landmarks")
-    if (isTRUE(input$show_landmarks)) {
-      proxy |>
-        leaflet::addCircleMarkers(
-          data = LANDMARKS, lng = ~lon, lat = ~lat, label = ~name,
-          group = "Landmarks", radius = 5, stroke = TRUE, weight = 1.5,
-          color = "#17231f", fillColor = "#f4c95d", fillOpacity = 1,
-          options = leaflet::pathOptions(pane = "marker-pane")
-        )
-    }
-  }, ignoreInit = FALSE)
-
+  # Keep the floating model/year status synchronized with the active controls.
   output$map_status <- shiny::renderUI({
     model <- active_model()
     shiny::div(
@@ -325,6 +298,7 @@ server <- function(input, output, session) {
     )
   })
 
+  # Surface preprocessing problems in the sidebar without crashing the map.
   output$metadata_notice <- shiny::renderUI({
     if (is.null(metadata_state$error)) return(NULL)
     shiny::div(
@@ -334,6 +308,7 @@ server <- function(input, output, session) {
     )
   })
 
+  # Forward client-side screenshot errors through Shiny notifications.
   shiny::observeEvent(input$screenshot_error, {
     shiny::showNotification(input$screenshot_error, type = "error", duration = 8)
   })
