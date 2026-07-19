@@ -19,6 +19,18 @@ MODEL_CATALOG <- data.frame(
     "Pfmdr1 Y184F",
     "Pfmdr1 D1246Y"
   ),
+  legend_note = c(
+    "0 = 0% ART-associated mutations; 0.6 = 60% ART-associated mutations",
+    "0 = 0% 675V; 0.6 = 60% 675V",
+    "0 = 0% 469Y; 0.6 = 60% 469Y",
+    "0 = 0% 441L; 0.6 = 60% 441L",
+    "0 = 0% 561H; 0.6 = 60% 561H",
+    "0 = 0% 622I; 0.6 = 60% 622I",
+    "0 = 100% K76; 1 = 100% 76T",
+    "0 = 100% N86; 1 = 100% 86Y",
+    "0 = 100% Y184; 1 = 100% 184F",
+    "0 = 100% D1246; 1 = 100% 1246Y"
+  ),
   relative_path = file.path(
     "outputs",
     c(
@@ -34,7 +46,7 @@ MODEL_CATALOG <- data.frame(
 # Packages required when the interactive dashboard starts.
 REQUIRED_PACKAGES <- c(
   "shiny", "bslib", "leaflet", "terra", "sf", "rnaturalearth",
-  "rnaturalearthdata", "viridisLite", "htmltools", "iddoPal"
+  "rnaturalearthdata", "viridisLite", "htmltools", "iddoPal", "dplyr"
 )
 
 # Initial camera position; users can zoom out to the unrestricted global map.

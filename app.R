@@ -238,7 +238,9 @@ server <- function(input, output, session) {
         shiny::incProgress(0.35, detail = "Preparing colours")
         domain <- model_domains[[model$model_id]]
         palette <- make_palette(domain, model$is_k13)
-        legend <- legend_html(model$model_label, domain, palette, model$is_k13)
+        legend <- legend_html(
+          model$model_label, model$legend_note, domain, palette, model$is_k13
+        )
 
         proxy <- leaflet::leafletProxy("prediction_map") |>
           leaflet::clearGroup("Prediction") |>

@@ -155,7 +155,7 @@ format_prediction <- function(value) {
 }
 
 # Construct a continuous HTML colour bar with family-specific tick positions.
-legend_html <- function(model_label, domain, palette, is_k13) {
+legend_html <- function(model_label, legend_note, domain, palette, is_k13) {
   gradient_positions <- seq(0, 1, length.out = 64)
   if (is_k13) {
     breaks <- K13_LEGEND_BREAKS
@@ -188,7 +188,7 @@ legend_html <- function(model_label, domain, palette, is_k13) {
     '</div><div class="prediction-legend__bar" style="background:linear-gradient(to right,',
     gradient_stops, ')"></div><div class="prediction-legend__ticks">',
     tick_labels, '</div><div class="prediction-legend__note">',
-    if (is_k13) "Square-root colour scale · range 0–0.6" else "Partner-drug scale · range 0–1",
+    htmltools::htmlEscape(legend_note),
     "</div></div>"
   )
 }

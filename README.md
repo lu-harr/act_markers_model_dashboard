@@ -11,8 +11,11 @@ Use R 4.1 or newer. Install the required packages once:
 ```r
 install.packages(c(
   "shiny", "bslib", "leaflet", "terra", "sf", "rnaturalearth",
-  "rnaturalearthdata", "viridisLite", "htmltools", "iddoPal"
+  "rnaturalearthdata", "viridisLite", "htmltools", "dplyr"
 ))
+
+# for IDDO blue-red palette
+devtools::install_github("lu-harr/iddoPal")
 ```
 
 The app uses public basemap tiles and Google Fonts, so those visual features require an internet connection. The pinned `html2canvas` 1.4.1 dependency is bundled under its MIT licence in `www/`, allowing the PNG-export logic itself to load without a CDN.
