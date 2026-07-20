@@ -1,6 +1,6 @@
 # ACT molecular markers model dashboard
 
-~Courtesy of ChatGPT 5.6~
+\~ Courtesy of ChatGPT 5.6 \~
 
 An R Shiny and Leaflet dashboard for exploring predictions described in the ten spatiotemporal models of molecular markers of artemisinin and ACT partner drug resistance/reduced susceptibility/drug pressure described in Harrison et al. (<https://doi.org/10.64898/2026.03.03.26347488>).
 

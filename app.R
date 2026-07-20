@@ -48,13 +48,20 @@ country_choices <- c(
   stats::setNames(countries$country_iso3, countries$country_name)
 )
 
+# CARTO provides a transparent label-only layer that can sit above either basemap.
+label_providers <- list(
+  "CartoDB.PositronNoLabels" = leaflet::providers$CartoDB.PositronOnlyLabels,
+  # bug here ... todo:
+  "OpenStreetMap.Mapnik" = leaflet::providers$CartoDB.PositronOnlyLabels
+)
+
 # Apply the visual theme consistently to inputs, typography, and notifications.
 theme <- bslib::bs_theme(
   version = 5,
-  bg = "#f5f4ef",
-  fg = "#17231f",
-  primary = "#176b57",
-  secondary = "#d8e2dc",
+  bg = "#F3EEED",
+  fg = "#675957",
+  primary = "#9D2123",
+  secondary = "#D36F5E",
   base_font = bslib::font_google("DM Sans"),
   heading_font = bslib::font_google("DM Sans")
 )
@@ -113,6 +120,12 @@ ui <- shiny::fluidPage(
           "basemap", "Basemap",
           choices = c("Light map" = "CartoDB.PositronNoLabels", "Street map" = "OpenStreetMap.Mapnik"),
           selected = "CartoDB.PositronNoLabels", width = "100%"
+        ),
+        shiny::div(
+          class = "map-label-control",
+          shiny::checkboxInput(
+            "labels_on_top", "Map labels on top", value = FALSE, width = "100%"
+          )
         ),
         shiny::actionButton(
           "download_map", "Save map as PNG",
@@ -240,7 +253,7 @@ server <- function(input, output, session) {
         data = countries,
         layerId = ~country_iso3,
         group = "National borders",
-        color = "#263d35",
+        color = "#675957",
         weight = 1,
         opacity = 0.9,
         fill = TRUE,
@@ -252,7 +265,7 @@ server <- function(input, output, session) {
           className = "country-label"
         ),
         highlightOptions = leaflet::highlightOptions(
-          color = "#fff6d5", weight = 3, opacity = 1,
+          color = "#FDEBE8", weight = 3, opacity = 1,
           fillOpacity = 0.08, bringToFront = TRUE
         ),
         options = leaflet::pathOptions(pane = "border-pane")
@@ -266,6 +279,7 @@ server <- function(input, output, session) {
     )) |>
       leaflet::addMapPane("prediction-pane", zIndex = 250) |>
       leaflet::addMapPane("border-pane", zIndex = 410) |>
+      leaflet::addMapPane("labels", zIndex = 416) |>
       leaflet::addMapPane("observation-pane", zIndex = 440) |>
       leaflet::addProviderTiles(
         leaflet::providers$CartoDB.PositronNoLabels,
@@ -289,6 +303,22 @@ server <- function(input, output, session) {
     leaflet::leafletProxy("prediction_map") |>
       leaflet::clearGroup("Basemap") |>
       leaflet::addProviderTiles(provider, group = "Basemap")
+  }, ignoreInit = TRUE)
+
+  # Optionally redraw a transparent place-label layer above the prediction raster.
+  shiny::observeEvent(list(input$labels_on_top, input$basemap), {
+    proxy <- leaflet::leafletProxy("prediction_map") |>
+      leaflet::clearGroup("Map labels")
+
+    if (isTRUE(input$labels_on_top)) {
+      provider <- label_providers[[input$basemap]]
+      proxy |>
+        leaflet::addProviderTiles(
+          provider,
+          group = "Map labels",
+          options = leaflet::providerTileOptions(pane = "labels", zIndex = 416)
+        )
+    }
   }, ignoreInit = TRUE)
 
   # Replace the raster, legend, and country summaries when model or year changes.
@@ -369,7 +399,7 @@ server <- function(input, output, session) {
         layerId = paste0("observation-", seq_len(nrow(points))),
         group = "Observations",
         stroke = TRUE,
-        color = "#f7f6f1",
+        color = "#F3EEED",
         weight = 1.25,
         opacity = 1,
         fillColor = palette(points$Prevalence),

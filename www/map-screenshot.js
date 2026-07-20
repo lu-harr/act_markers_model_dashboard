@@ -26,7 +26,7 @@
     window.html2canvas(map, {
       useCORS: true,
       allowTaint: false,
-      backgroundColor: "#dce3df",
+      backgroundColor: "#e3d8d6",
       logging: false,
       scale: Math.min(window.devicePixelRatio || 1, 2)
     }).then(function (canvas) {
@@ -44,4 +44,3 @@
     });
   });
 })();
-
